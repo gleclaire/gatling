@@ -15,6 +15,8 @@
  */
 package io.gatling.http.ahc
 
+import java.util.concurrent.atomic.AtomicInteger
+
 import com.ning.http.client.{ HttpResponseBodyPart, HttpResponseHeaders, HttpResponseStatus, ProgressAsyncHandler }
 import com.ning.http.client.AsyncHandler.STATE.CONTINUE
 import com.typesafe.scalalogging.slf4j.Logging
@@ -44,12 +46,20 @@ object AsyncHandler {
  */
 class AsyncHandler(requestName: String, actor: ActorRef, useBodyParts: Boolean) extends ProgressAsyncHandler[Unit] with Logging {
 
+	@volatile var headerWriteCompleted = false
+	@volatile var contentWriteCompleted = false
+	@volatile var statusReceived = false
+	@volatile var headersReceived = false
+	val bodyPartReceived = new AtomicInteger(0)
+
 	def onHeaderWriteCompleted = {
+		headerWriteCompleted = true
 		actor ! new OnHeaderWriteCompleted
 		CONTINUE
 	}
 
 	def onContentWriteCompleted = {
+		contentWriteCompleted = true
 		actor ! new OnContentWriteCompleted
 		CONTINUE
 	}
@@ -57,22 +67,25 @@ class AsyncHandler(requestName: String, actor: ActorRef, useBodyParts: Boolean) 
 	def onContentWriteProgress(amount: Long, current: Long, total: Long) = CONTINUE
 
 	def onStatusReceived(responseStatus: HttpResponseStatus) = {
+		statusReceived = true
 		actor ! new OnStatusReceived(responseStatus)
 		CONTINUE
 	}
 
 	def onHeadersReceived(headers: HttpResponseHeaders) = {
+		headersReceived = true
 		actor ! new OnHeadersReceived(headers)
 		CONTINUE
 	}
 
 	def onBodyPartReceived(bodyPart: HttpResponseBodyPart) = {
+		bodyPartReceived.incrementAndGet
 		actor ! new OnBodyPartReceived(if (useBodyParts) Some(bodyPart) else None)
 		CONTINUE
 	}
 
 	def onCompleted {
-		actor ! new OnCompleted
+		actor ! new OnCompleted(Progress(headerWriteCompleted, contentWriteCompleted, statusReceived, headersReceived, bodyPartReceived.get, true))
 	}
 
 	def onThrowable(throwable: Throwable) {
